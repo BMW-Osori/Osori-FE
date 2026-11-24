@@ -1,6 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_classic_bluetooth/flutter_classic_bluetooth.dart';
+import 'package:universal_ble/universal_ble.dart';
 
 import 'state.dart';
 import 'ui.dart';
@@ -30,7 +30,7 @@ class HomeTab extends StatelessWidget {
                 child: ListTile(
                   leading: IconBox(connected ? Icons.bluetooth_connected : Icons.bluetooth_searching),
                   title: Text(connected ? app.deviceName : '기기 미연결', style: bold),
-                  subtitle: Text(connected ? '차량 접근 신호 수신 대기 중' : '보행자 디바이스를 찾아 페어링하세요', style: mutedText),
+                  subtitle: Text(connected ? '차량 접근 신호 수신 대기 중' : '보행자 디바이스를 찾아 연결하세요', style: mutedText),
                   trailing: connected
                       ? CupertinoButton(padding: EdgeInsets.zero, minimumSize: const Size(44, 44), onPressed: app.disconnect, child: const Text('해제'))
                       : CupertinoButton.tinted(
@@ -116,9 +116,9 @@ class _BurstBanner extends StatelessWidget {
       );
 }
 
-/// 기기 페어링: 페어링된 기기 → 바로 연결, 새로 찾은 기기 → 페어링 후 연결
+/// 기기 연결: 열면 바로 BLE 검색, 찾은 기기를 눌러 연결
 void showPairingSheet(BuildContext context) {
-  app.loadPaired();
+  app.scan();
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
@@ -129,9 +129,9 @@ void showPairingSheet(BuildContext context) {
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text('기기 페어링', style: bold.copyWith(fontSize: 18)),
+            Text('기기 연결', style: bold.copyWith(fontSize: 18)),
             const SizedBox(height: 4),
-            Text('보행자 디바이스(블루투스 SPP)를 검색해 페어링하고 연결합니다.', style: mutedText),
+            Text('주변의 보행자 디바이스(BLE)를 찾아 연결합니다.', style: mutedText),
             const SizedBox(height: 16),
             CupertinoButton.filled(
               onPressed: app.scanning ? null : app.scan,
@@ -141,17 +141,12 @@ void showPairingSheet(BuildContext context) {
               ]),
             ),
             if (app.btMessage != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(app.btMessage!, style: mutedText)),
-            if (app.paired.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text('페어링된 기기', style: bold.copyWith(fontSize: 13, color: muted)),
-              for (final d in app.paired) _DeviceTile(d, pair: false),
-            ],
             if (app.found.isNotEmpty) ...[
               const SizedBox(height: 16),
-              Text('새로 찾은 기기', style: bold.copyWith(fontSize: 13, color: muted)),
-              for (final d in app.found) _DeviceTile(d, pair: true),
+              Text('찾은 기기', style: bold.copyWith(fontSize: 13, color: muted)),
+              for (final d in app.found) _DeviceTile(d),
             ],
-            if (app.paired.isEmpty && app.found.isEmpty && !app.scanning)
+            if (app.found.isEmpty && !app.scanning && app.btMessage == null)
               Padding(padding: const EdgeInsets.only(top: 16), child: Text('표시할 기기가 없습니다.', style: mutedText)),
           ]),
         ),
@@ -161,19 +156,18 @@ void showPairingSheet(BuildContext context) {
 }
 
 class _DeviceTile extends StatelessWidget {
-  const _DeviceTile(this.d, {required this.pair});
-  final BtcDevice d;
-  final bool pair;
+  const _DeviceTile(this.d);
+  final BleDevice d;
 
   @override
   Widget build(BuildContext context) => ListTile(
         contentPadding: EdgeInsets.zero,
         leading: const IconBox(Icons.watch),
-        title: Text(d.displayName, style: bold),
-        subtitle: Text(d.address, style: mutedText),
-        trailing: Text(pair ? '페어링' : '연결', style: TextStyle(color: brand, fontWeight: FontWeight.w600)),
+        title: Text(d.name ?? '보행자 디바이스', style: bold),
+        subtitle: Text(d.rssi == null ? d.deviceId : '${d.deviceId} · ${d.rssi}dBm', style: mutedText),
+        trailing: Text('연결', style: TextStyle(color: brand, fontWeight: FontWeight.w600)),
         onTap: () async {
-          if (await app.connect(d, pair: pair) && context.mounted) Navigator.pop(context);
+          if (await app.connect(d) && context.mounted) Navigator.pop(context);
         },
       );
 }
