@@ -16,3 +16,11 @@ flutter test test/ui_test.dart                                                  
 ```
 
 글꼴 Pretendard(SIL OFL), 지도 © OpenStreetMap contributors. 채팅 모델 표기는 `NOTICE` 참고.
+
+## 함께 쓰는 저장소
+
+| 저장소 | 역할 |
+| --- | --- |
+| [Osori-BE](https://github.com/BMW-Osori/Osori-BE) | 백엔드 (Spring Boot, PostgreSQL) |
+| [Osori-Presentation](https://github.com/BMW-Osori/Osori-Presentation) | 시연 사이트와 AI 서비스 |
+| [Osori-QWEN](https://github.com/BMW-Osori/Osori-QWEN) | 채팅 모델 튜닝 (Qwen2.5-3B) |
