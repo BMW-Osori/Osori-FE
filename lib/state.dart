@@ -44,7 +44,10 @@ const badgeService = '6e400001-b5a3-f393-e0a9-e50e24dcca9e', badgeTx = '6e400003
 
 /// notify 조각을 \n 까지 이어 붙여 한 줄씩 (UTF-8 이 조각 경계에서 잘려도 됨)
 Stream<String> badgeLines(Stream<List<int>> chunks) =>
-    chunks.transform(const Utf8Decoder(allowMalformed: true)).transform(const LineSplitter());
+    chunks
+        .map<List<int>>((e) => e)
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .transform(const LineSplitter());
 final notifications = FlutterLocalNotificationsPlugin();
 final app = AppState();
 
