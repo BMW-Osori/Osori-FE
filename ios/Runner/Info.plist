@@ -31,6 +31,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>보행자 디바이스와 연결해 차량 접근 신호를 받습니다.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

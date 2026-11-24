@@ -13,6 +13,7 @@ flutter run --dart-define=AI_URL=https://<서버 주소>
 flutter test --dart-define=AI_URL=http://127.0.0.1:18788 test/report_test.dart   # API 호출
 flutter test --dart-define=AI_URL=http://127.0.0.1:18787 test/stream_test.dart   # 채팅 스트리밍
 flutter test test/ui_test.dart                                                   # 화면 넘침
+flutter test test/ble_test.dart                                                  # BLE 조각 → 한 줄 JSON
 ```
 
 글꼴 Pretendard(SIL OFL), 지도 © OpenStreetMap contributors. 채팅 모델 표기는 `NOTICE` 참고.

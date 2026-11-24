@@ -5,10 +5,10 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_classic_bluetooth/flutter_classic_bluetooth.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:universal_ble/universal_ble.dart';
 
 // 서버 주소 (iOS 시뮬레이터는 localhost). /api/v1 은 백엔드(Spring Boot), /api/chat 은 AI 서비스. 실기기: --dart-define=AI_URL=http://<PC IP>:8787
 const aiUrl = String.fromEnvironment('AI_URL', defaultValue: 'http://localhost:8787');
@@ -39,7 +39,12 @@ const alertDetails = NotificationDetails(
       importance: Importance.max, priority: Priority.high),
 );
 
-final bt = FlutterClassicBluetooth();
+// 보행자 디바이스(device/osori_badge): Nordic UART Service 의 TX 특성 notify 로 한 줄 JSON 을 조각내 보냄
+const badgeService = '6e400001-b5a3-f393-e0a9-e50e24dcca9e', badgeTx = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+
+/// notify 조각을 \n 까지 이어 붙여 한 줄씩 (UTF-8 이 조각 경계에서 잘려도 됨)
+Stream<String> badgeLines(Stream<List<int>> chunks) =>
+    chunks.transform(const Utf8Decoder(allowMalformed: true)).transform(const LineSplitter());
 final notifications = FlutterLocalNotificationsPlugin();
 final app = AppState();
 
@@ -176,10 +181,11 @@ class AppState extends ChangeNotifier {
   int _sample = 0;
 
   // 블루투스
-  BtcConnection? conn;
+  BleDevice? conn;
+  List<StreamSubscription> _links = [];
   String deviceName = '';
   String? deviceAddress;
-  List<BtcDevice> paired = [], found = [];
+  List<BleDevice> found = [];
   bool scanning = false;
   String? btMessage;
 
@@ -388,68 +394,74 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  // 페어링: 페어링된 기기 목록 + (Android) 주변 검색 → 페어링 → 연결
-  Future<void> loadPaired() async {
-    try {
-      paired = await bt.getPairedDevices();
-    } on BtcException catch (e) {
-      btMessage = '블루투스 오류: ${e.message}';
-    }
-    notifyListeners();
-  }
-
+  // BLE: 서비스 UUID 로 8초 검색 → 연결 → TX notify 구독. 페어링(bond)은 필요 없음
   Future<void> scan() async {
+    if (scanning) return;
     update(() {
       scanning = true;
       btMessage = null;
+      found = [];
+    });
+    final results = UniversalBle.scanStream.listen((d) {
+      if (!found.any((f) => f.deviceId == d.deviceId)) update(() => found.add(d));
     });
     try {
-      if ((await bt.getPlatformCapabilities()).canDiscoverDevices) {
-        final known = {for (final d in paired) d.address};
-        found = (await bt.scan(timeout: const Duration(seconds: 8))).where((d) => !known.contains(d.address)).toList();
-        if (found.isEmpty) btMessage = '주변에서 새 기기를 찾지 못했습니다. 보행자 디바이스 전원과 거리를 확인하세요.';
-      } else {
-        btMessage = '이 기기는 주변 검색을 지원하지 않습니다 (iOS 는 MFi 기기만). 설정에서 페어링된 기기를 사용하세요.';
-      }
-    } on BtcException catch (e) {
-      btMessage = '검색 실패: ${e.message}';
+      await UniversalBle.startScan(
+        scanFilter: ScanFilter(withServices: [badgeService]),
+        platformConfig: PlatformConfig(android: AndroidOptions(legacy: true)), // ESP32 는 BLE 4 광고
+      );
+      await Future.delayed(const Duration(seconds: 8));
+      await UniversalBle.stopScan();
+      if (found.isEmpty) btMessage = '주변에서 보행자 디바이스를 찾지 못했습니다. 디바이스 전원과 거리를 확인하세요.';
+    } catch (e) {
+      btMessage = '검색 실패: ${_bleReason(e)}';
     }
+    await results.cancel();
     update(() => scanning = false);
   }
 
-  /// 새 기기는 먼저 페어링(bond) 후 연결. 성공하면 true.
-  Future<bool> connect(BtcDevice d, {bool pair = false}) async {
+  Future<bool> connect(BleDevice d) async {
     try {
-      if (pair && !await bt.bondDevice(d.address)) throw BtcException('페어링이 거절되었습니다');
-      final c = await bt.connect(address: d.address, timeout: const Duration(seconds: 15));
-      c.input.lines().listen(onLine, onDone: () => _drop(c));
+      await d.connect(timeout: const Duration(seconds: 15));
+      final tx = await d.getCharacteristic(badgeTx, service: badgeService);
+      conn = d;
+      _links = [
+        badgeLines(tx.onValueReceived).listen(onLine),
+        d.connectionStream.listen((up) => up ? null : _drop(d)),
+      ];
+      await tx.notifications.subscribe();
       update(() {
-        conn = c;
-        deviceName = d.displayName;
-        deviceAddress = d.address;
+        deviceName = d.name ?? '보행자 디바이스';
+        deviceAddress = d.deviceId;
         btMessage = null;
       });
       return true;
-    } on BtcException catch (e) {
-      update(() => btMessage = '연결 실패: ${e.message}');
+    } catch (e) {
+      _drop(d);
+      d.disconnect().ignore();
+      update(() => btMessage = '연결 실패: ${_bleReason(e)}');
       return false;
     }
   }
 
   Future<void> disconnect() async {
-    final c = conn;
-    if (c == null) return;
-    await c.close();
-    _drop(c);
+    final d = conn;
+    if (d == null) return;
+    _drop(d);
+    await d.disconnect();
   }
 
   // 사용자 해제/기기 측 끊김 어느 쪽이 먼저 와도 한 번만 정리
-  void _drop(BtcConnection c) {
-    if (conn != c) return;
-    c.dispose();
+  void _drop(BleDevice d) {
+    if (conn != d) return;
+    for (final l in _links) {
+      l.cancel();
+    }
     update(() {
       conn = null;
       deviceAddress = null;
     });
   }
 }
+
+String _bleReason(Object e) => e is UniversalBleException ? e.message : '$e';
