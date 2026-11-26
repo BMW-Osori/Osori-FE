@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pedestrian_alert/state.dart';
@@ -8,7 +9,8 @@ void main() {
   test('BLE notify 조각을 줄로 합침', () async {
     final lines = [samples[0], '{"note":"한글도 조각 경계에서 잘림"}'];
     final bytes = utf8.encode('${lines.join('\n')}\n');
-    final chunks = [for (var i = 0; i < bytes.length; i += 20) bytes.sublist(i, i + 20 > bytes.length ? bytes.length : i + 20)];
-    expect(await badgeLines(Stream.fromIterable(chunks)).toList(), lines);
+    final chunks = [for (var i = 0; i < bytes.length; i += 20) Uint8List.sublistView(bytes, i, i + 20 > bytes.length ? bytes.length : i + 20)];
+    // 실기기 notify 는 Stream<Uint8List>. 타입을 안 적으면 Stream<List<int>> 로 추론돼 디코더 타입 에러를 못 잡음
+    expect(await badgeLines(Stream<Uint8List>.fromIterable(chunks)).toList(), lines);
   });
 }

@@ -65,7 +65,11 @@ void main() {
 
   AppState newApp() => AppState()
     ..notify = false // 알림 플러그인은 테스트 환경에 없음
+    ..recordAfter = Duration.zero
     ..locate = () async => (latitude: 37.385, longitude: 127.1235);
+  // 펌웨어(device/osori_badge)가 상태가 바뀔 때마다 보내는 줄. duration_ms 는 접근 시작부터
+  String badge(String level, int rssi, double distance, int count, int ms) =>
+      '{"max_rssi":$rssi,"min_estimated_distance":$distance,"consecutive_count":$count,"alert_level":"$level","vibration_triggered":true,"duration_ms":$ms}';
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     calls.clear();
@@ -111,6 +115,36 @@ void main() {
     a.onLine(samples[2]);
     await settle(a);
     expect(calls.map((c) => c.$1.split('?').first), ['/api/v1/proximity-events', '/api/v1/risk-zones'], reason: '샘플 없는 줄은 샘플 저장도 생략');
+  });
+
+  test('한 접근의 여러 줄(CAUTION→DANGER→CAUTION)은 경고 하나, 합친 값으로 이벤트 한 건', () async {
+    final a = newApp()..recordAfter = const Duration(milliseconds: 300);
+    a.onLine(badge('CAUTION', -63, 1.6, 1, 0));
+    await Future.delayed(const Duration(milliseconds: 100));
+    a.onLine(badge('DANGER', -54, 0.6, 2, 100));
+    await Future.delayed(const Duration(milliseconds: 100));
+    a.onLine(badge('CAUTION', -60, 1.1, 3, 200));
+    expect(a.alerts.length, 1, reason: '차 한 대를 동시 다발로 세지 않음');
+    expect(calls.where((c) => c.$1 == '/api/v1/proximity-events'), isEmpty, reason: '접근이 끝난 뒤 기록');
+    await settle(a);
+    final saved = calls.where((c) => c.$1 == '/api/v1/proximity-events').map((c) => c.$2!).toList();
+    expect(saved.length, 1);
+    expect([saved.single['alertLevel'], saved.single['maxRssi'], saved.single['minEstimatedDistance'], saved.single['consecutiveCount']], ['DANGER', -54, 0.6, 3]);
+    expect(DateTime.parse(saved.single['endedAt']).difference(DateTime.parse(saved.single['startedAt'])).inMilliseconds, lessThan(1500));
+  });
+
+  test('새 접근(0부터 다시 잼)과 테스트 경고는 따로 셈', () async {
+    final a = newApp()
+      ..recordAfter = const Duration(milliseconds: 300)
+      ..burstNotify = false; // 3건째에 동시 다발 알림 (플러그인 없음)
+    a.onLine(badge('CAUTION', -63, 1.6, 1, 0));
+    a.onLine(badge('CAUTION', -64, 1.8, 1, 0));
+    a
+      ..testAlert()
+      ..testAlert()
+      ..testAlert()
+      ..testAlert();
+    expect(a.alerts.length, 6);
   });
 
   test('서버에서 디바이스가 사라졌으면 다시 등록해 저장', () async {

@@ -25,6 +25,9 @@ String radiusLabel(int m) => m >= 1000 ? '${m ~/ 1000}km' : '${m}m';
 // 동시 다발: 웹과 같은 기준(15분 안에 3건 이상). 앱은 GPS 없이 시간만 봄.
 const burstWindow = Duration(minutes: 15), burstCount = 3;
 
+// 한 번의 접근: 펌웨어는 상태가 바뀔 때마다(CAUTION→DANGER→CAUTION) 한 줄씩 보냄. 따로 세면 차 한 대로 동시 다발 경고가 울림
+const sameApproach = Duration(milliseconds: 1500); // duration_ms 로 거슬러 간 접근 시작이 이 안이면 같은 접근
+
 // 보행자 디바이스가 차량 감지 시 보내는 한 줄 JSON (\n 구분). 테스트 경고는 이 예시를 순서대로 보냄.
 // alert_level: SAFE·CAUTION·DANGER·RELEASED. duration_ms·samples(offset_ms 는 감지 시작 기준)는 선택.
 const samples = [
@@ -111,13 +114,43 @@ Stream<String> apiStream(String path, Object body) async* {
 }
 
 class Alert {
-  Alert(this.event);
-  final DateTime time = DateTime.now();
+  Alert(this.event) : startedAt = DateTime.now().subtract(Duration(milliseconds: event['duration_ms'] ?? 0));
+  final DateTime time = DateTime.now(); // 첫 줄을 받은 시각
+  DateTime endedAt = DateTime.now(); // 같은 접근의 마지막 줄을 받은 시각
+  final DateTime startedAt;
   final Map<String, dynamic> event;
   int? eventId; // 서버에 저장된 접근 이벤트
   Map<String, dynamic>? zone; // 가장 가까운 위험구역
   bool checkedZones = false;
   String? error; // 서버 기록 실패 사유 (경고는 이미 울린 뒤)
+  Timer? _record; // 접근이 끝나면 서버에 기록
+  bool _sent = false;
+
+  /// 같은 접근의 다음 줄인지: 접근 시작이 같고 잰 시간이 늘어남 (새 접근은 0부터 다시 잼)
+  bool continues(Map<String, dynamic> next) {
+    final ms = next['duration_ms'];
+    if (ms is! int || ms <= (event['duration_ms'] ?? 0)) return false;
+    return DateTime.now().subtract(Duration(milliseconds: ms)).difference(startedAt).abs() <= sameApproach;
+  }
+
+  /// 같은 접근의 다음 줄을 합침: 더 위험한 단계·센 신호·가까운 거리. DANGER 로 올라가면 true
+  bool merge(Map<String, dynamic> next) {
+    endedAt = DateTime.now();
+    final up = next['alert_level'] == 'DANGER' && event['alert_level'] != 'DANGER';
+    num? pick(String key, num Function(num, num) f) => switch ((event[key], next[key])) {
+          (num a, num b) => f(a, b),
+          (final a, final b) => (a ?? b) as num?,
+        };
+    event
+      ..['alert_level'] = up ? 'DANGER' : event['alert_level']
+      ..['max_rssi'] = pick('max_rssi', math.max)
+      ..['min_estimated_distance'] = pick('min_estimated_distance', math.min)
+      ..['consecutive_count'] = pick('consecutive_count', math.max)
+      ..['duration_ms'] = next['duration_ms'];
+    if (next['vibration_triggered'] == true) event['vibration_triggered'] = true;
+    if (next['samples'] is List) event['samples'] = [...?event['samples'] as List?, ...next['samples']];
+    return up;
+  }
 }
 
 String _at(DateTime t, [int length = 19]) => t.toIso8601String().substring(0, length); // 명세 예시처럼 오프셋 없음
@@ -261,15 +294,19 @@ class AppState extends ChangeNotifier {
     reloadMap();
   }
 
+  /// 접근이 끝났다고 보는 조용한 시간. 이벤트 수정 API 가 없어 끝난 뒤 합친 값을 한 건만 저장. 테스트에서 바꿔 끼움
+  Duration recordAfter = const Duration(seconds: 5);
+
   /// 위치 얻기: 테스트에서 바꿔 끼움
   Future<Place> Function() locate = () async {
     final p = await _currentPosition();
     return (latitude: p.latitude, longitude: p.longitude);
   };
 
-  void testAlert() => onLine(samples[_sample++ % samples.length]);
+  void testAlert() => onLine(samples[_sample++ % samples.length], test: true);
 
-  void onLine(String line) {
+  /// [test]: 테스트 경고는 누를 때마다 다른 접근
+  void onLine(String line, {bool test = false}) {
     final Map<String, dynamic> event;
     try {
       event = jsonDecode(line);
@@ -277,18 +314,17 @@ class AppState extends ChangeNotifier {
       return; // 깨진 패킷 무시
     }
     if (const {'SAFE', 'RELEASED'}.contains(event['alert_level'])) return; // 대기·해제는 경고 상황이 아님
+    final last = alerts.firstOrNull;
+    if (!test && last != null && last.continues(event)) {
+      if (last.merge(event)) _warn(last.event); // 더 가까워졌을 때만 다시 경고
+      notifyListeners();
+      if (!last._sent) _recordLater(last); // 이미 기록했으면 화면만 갱신 (이벤트 수정 API 가 없음)
+      return;
+    }
     final alert = Alert(event);
     update(() => alerts.insert(0, alert));
     // 즉시 경고가 먼저, 서버 기록은 그 뒤 (네트워크가 없어도 경고는 울림)
-    if (vibrate) HapticFeedback.heavyImpact();
-    if (notify) {
-      notifications.show(
-        id: 0,
-        title: '⚠️ 차량 접근 경고',
-        body: '저소음 차량이 ${event['min_estimated_distance'] ?? '?'}m 이내에 있습니다. 전방을 주시하세요.',
-        notificationDetails: alertDetails,
-      );
-    }
+    _warn(event);
     if (recent.length == burstCount && burstNotify) {
       if (vibrate) HapticFeedback.vibrate();
       notifications.show(
@@ -298,7 +334,28 @@ class AppState extends ChangeNotifier {
         notificationDetails: alertDetails,
       );
     }
-    _report(alert);
+    _recordLater(alert);
+  }
+
+  void _warn(Map<String, dynamic> event) {
+    if (vibrate) HapticFeedback.heavyImpact();
+    if (notify) {
+      notifications.show(
+        id: 0,
+        title: '⚠️ 차량 접근 경고',
+        body: '저소음 차량이 ${event['min_estimated_distance'] ?? '?'}m 이내에 있습니다. 전방을 주시하세요.',
+        notificationDetails: alertDetails,
+      );
+    }
+  }
+
+  /// 같은 접근의 줄이 [recordAfter] 동안 더 오지 않으면 합친 값을 한 건으로 기록
+  void _recordLater(Alert a) {
+    a._record?.cancel();
+    a._record = Timer(recordAfter, () {
+      a._sent = true;
+      _report(a);
+    });
   }
 
   /// 감지 결과 저장(POST /proximity-events, /samples) 후 주변 위험구역 조회(GET /risk-zones).
@@ -314,7 +371,7 @@ class AppState extends ChangeNotifier {
               {
                 'rssi': s['rssi'],
                 'estimatedDistance': s['estimated_distance'],
-                'measuredAt': _at(_startedAt(a).add(Duration(milliseconds: s['offset_ms'] ?? 0)), 23),
+                'measuredAt': _at(a.startedAt.add(Duration(milliseconds: s['offset_ms'] ?? 0)), 23),
               },
           ],
         });
@@ -329,8 +386,6 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  DateTime _startedAt(Alert a) => a.time.subtract(Duration(milliseconds: a.event['duration_ms'] ?? 0));
-
   Future<int> _saveEvent(Alert a, Place at) async {
     final e = a.event;
     final body = {
@@ -341,8 +396,8 @@ class AppState extends ChangeNotifier {
       'alertLevel': e['alert_level'] == 'DANGER' ? 'DANGER' : 'CAUTION', // 모르는 값도 경고로 기록
       'consecutiveCount': e['consecutive_count'],
       'vibrationTriggered': e['vibration_triggered'] ?? vibrate,
-      'startedAt': _at(_startedAt(a)),
-      'endedAt': _at(a.time),
+      'startedAt': _at(a.startedAt),
+      'endedAt': _at(a.endedAt),
     };
     try {
       return (await api('/api/v1/proximity-events', {'deviceId': await _deviceId(), ...body}))['eventId'];
