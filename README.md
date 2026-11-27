@@ -4,10 +4,11 @@
 
 ```sh
 flutter pub get
-flutter run --dart-define=AI_URL=https://<서버 주소>
+flutter run                                                  # 배포 서버(https://43-200-19-220.sslip.io)에 연결
+flutter run --dart-define=AI_URL=http://localhost:8787       # 로컬 서버 (실기기는 http://<PC IP>:8787)
 ```
 
-`AI_URL` 은 [Osori-Presentation](https://github.com/BMW-Osori/Osori-Presentation) 을 띄운 주소입니다. Caddy 가 `/api/v1` 을 [Osori-BE](https://github.com/BMW-Osori/Osori-BE) 로, `/api/chat` 을 AI 서비스로 넘깁니다.
+서버 주소 하나로 백엔드와 AI 서비스를 함께 씁니다. 그 주소의 Caddy 가 `/api/v1` 을 [Osori-BE](https://github.com/BMW-Osori/Osori-BE) 로, `/api/chat`·`/api/bursts` 를 AI 서비스([Osori-Presentation](https://github.com/BMW-Osori/Osori-Presentation))로 넘깁니다.
 
 ```sh
 flutter test --dart-define=AI_URL=http://127.0.0.1:18788 test/report_test.dart   # API 호출

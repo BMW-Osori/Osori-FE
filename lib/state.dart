@@ -10,8 +10,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:universal_ble/universal_ble.dart';
 
-// 서버 주소 (iOS 시뮬레이터는 localhost). /api/v1 은 백엔드(Spring Boot), /api/chat 은 AI 서비스. 실기기: --dart-define=AI_URL=http://<PC IP>:8787
-const aiUrl = String.fromEnvironment('AI_URL', defaultValue: 'http://localhost:8787');
+// 서버 주소: 기본은 배포 서버. Caddy 가 /api/v1 을 백엔드(Spring Boot)로, /api/chat·/api/bursts 를 AI 서비스로 넘김.
+// 로컬 개발: --dart-define=AI_URL=http://localhost:8787 (iOS 시뮬레이터) 또는 http://<PC IP>:8787 (실기기)
+const aiUrl = String.fromEnvironment('AI_URL', defaultValue: 'https://43-200-19-220.sslip.io');
 
 // 주변 검색 기준: 현재 위치 + 반경. 위치를 못 얻거나 예시를 볼 때는 데이터가 있는 성남시 전체
 typedef Place = ({double latitude, double longitude});
